@@ -13,8 +13,15 @@ import {
 import { createEventHarness } from "./helpers/pi-harness.js";
 
 describe("cursor-session-scope cwd", () => {
+	const originalPrimeAgentDir = process.env.PRIME_AGENT_CODING_AGENT_DIR;
+	const originalPrimeProjectTrust = process.env.PRIME_AGENT_PROJECT_TRUSTED;
+
 	afterEach(() => {
 		cursorSessionScopeTestUtils.reset();
+		if (originalPrimeAgentDir === undefined) delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+		else process.env.PRIME_AGENT_CODING_AGENT_DIR = originalPrimeAgentDir;
+		if (originalPrimeProjectTrust === undefined) delete process.env.PRIME_AGENT_PROJECT_TRUSTED;
+		else process.env.PRIME_AGENT_PROJECT_TRUSTED = originalPrimeProjectTrust;
 	});
 
 	it("falls back to process.cwd() before session_start", () => {
@@ -50,6 +57,21 @@ describe("cursor-session-scope cwd", () => {
 
 			cursorSessionScopeTestUtils.recordProjectTrustResolution(cwd);
 			await pi.runSessionStart({ cwd, isProjectTrusted: vi.fn(() => true) });
+			expect(getCursorSessionProjectTrusted()).toBe(true);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("uses Prime's explicit process opt-in when no Pi trust context exists", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "prime-cursor-session-trust-"));
+		try {
+			process.env.PRIME_AGENT_CODING_AGENT_DIR = join(cwd, ".prime", "agent");
+			process.env.PRIME_AGENT_PROJECT_TRUSTED = "1";
+			const pi = createEventHarness();
+			registerCursorSessionScope(pi);
+
+			await pi.runSessionStart({ cwd });
 			expect(getCursorSessionProjectTrusted()).toBe(true);
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });

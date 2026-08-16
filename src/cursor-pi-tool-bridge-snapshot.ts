@@ -28,6 +28,11 @@ function isOverlappingCursorNativePiToolName(toolName: string): boolean {
 	return OVERLAPPING_CURSOR_NATIVE_PI_BUILTIN_TOOL_NAMES.has(toolName);
 }
 
+function getToolPromptGuidelines(tool: unknown): string[] | undefined {
+	const value = (tool as { promptGuidelines?: unknown }).promptGuidelines;
+	return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : undefined;
+}
+
 export function buildCursorPiToolBridgeSurfaceSignature(snapshot: CursorPiToolBridgeSnapshot): string {
 	if (snapshot.tools.length === 0) return "bridge:empty";
 	const serializedTools = snapshot.tools
@@ -36,7 +41,7 @@ export function buildCursorPiToolBridgeSurfaceSignature(snapshot: CursorPiToolBr
 				piToolName: tool.piToolName,
 				mcpToolName: tool.mcpToolName,
 				description: tool.description,
-				promptGuidelines: tool.promptGuidelines,
+				promptGuidelines: getToolPromptGuidelines(tool),
 				inputSchema: tool.inputSchema,
 				source: tool.sourceInfo?.source,
 				path: tool.sourceInfo?.path,
@@ -74,7 +79,7 @@ export function buildCursorPiToolBridgeSnapshot(
 			piToolName: tool.name,
 			mcpToolName,
 			description,
-			promptGuidelines: tool.promptGuidelines,
+			promptGuidelines: getToolPromptGuidelines(tool),
 			inputSchema: normalizeMcpInputSchema(tool.parameters),
 			sourceInfo: tool.sourceInfo,
 		});

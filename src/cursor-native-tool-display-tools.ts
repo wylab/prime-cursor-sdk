@@ -1,15 +1,11 @@
 import {
 	createBashToolDefinition,
 	createEditToolDefinition,
-	createFindToolDefinition,
-	createGrepToolDefinition,
-	createLsToolDefinition,
-	createReadToolDefinition,
-	createWriteToolDefinition,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { TSchema } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { getCursorSessionCwd } from "./cursor-session-scope.js";
 import {
 	BUILTIN_NATIVE_CURSOR_TOOL_NAMES,
@@ -121,30 +117,75 @@ function renderWriteReplayResult(
 		: renderBase();
 }
 
+type OptionalNativeToolFactory = (cwd: string) => AnyToolDefinition;
+
+function getOptionalNativeToolFactory(name: string): OptionalNativeToolFactory | undefined {
+	const candidate = (PiCodingAgent as Record<string, unknown>)[name];
+	return typeof candidate === "function" ? candidate as OptionalNativeToolFactory : undefined;
+}
+
+const FALLBACK_NATIVE_TOOL_SCHEMAS: Record<BuiltinNativeCursorToolName, TSchema> = {
+	read: Type.Object({ path: Type.Optional(Type.String()) }, { additionalProperties: true }),
+	bash: Type.Object({ command: Type.Optional(Type.String()) }, { additionalProperties: true }),
+	edit: Type.Object({ path: Type.Optional(Type.String()) }, { additionalProperties: true }),
+	write: Type.Object({ path: Type.Optional(Type.String()), content: Type.Optional(Type.String()) }, { additionalProperties: true }),
+	grep: Type.Object({ pattern: Type.Optional(Type.String()), path: Type.Optional(Type.String()) }, { additionalProperties: true }),
+	find: Type.Object({ pattern: Type.Optional(Type.String()), path: Type.Optional(Type.String()) }, { additionalProperties: true }),
+	ls: Type.Object({ path: Type.Optional(Type.String()) }, { additionalProperties: true }),
+};
+
+function createPrimeFallbackNativeToolDefinition(toolName: BuiltinNativeCursorToolName): AnyToolDefinition {
+	return {
+		name: toolName,
+		label: toolName,
+		description: `Display recorded Cursor ${toolName} activity. This Prime-compatible replay surface never executes work directly.`,
+		parameters: FALLBACK_NATIVE_TOOL_SCHEMAS[toolName],
+		async execute() {
+			throw new Error(`Prime does not expose a native ${toolName} tool definition; this Cursor surface is replay-only.`);
+		},
+		renderCall(args, theme, context) {
+			if (!context.isPartial) return new Text("", 0, 0);
+			const summary = typeof (args as Record<string, unknown>)?.path === "string" ? ` ${(args as Record<string, unknown>).path}` : "";
+			return new Text(theme.fg("toolTitle", theme.bold(`${toolName}${summary}`)), 0, 0);
+		},
+		renderResult(result, _options, theme, _context) {
+			const text = result.content.find((entry) => entry.type === "text");
+			return new Text(theme.fg("toolOutput", text?.type === "text" ? text.text : "Cursor activity replayed"), 0, 0);
+		},
+	};
+}
+
+function createPrimeCompatibleNativeToolDefinition(toolName: BuiltinNativeCursorToolName, cwd: string): AnyToolDefinition {
+	if (toolName === "bash") return createBashToolDefinition(cwd) as AnyToolDefinition;
+	if (toolName === "edit") return createEditToolDefinition(cwd) as AnyToolDefinition;
+	const factory = getOptionalNativeToolFactory(`create${toolName[0].toUpperCase()}${toolName.slice(1)}ToolDefinition`);
+	return factory ? factory(cwd) : createPrimeFallbackNativeToolDefinition(toolName);
+}
+
 const NATIVE_CURSOR_TOOL_STRATEGIES: Record<BuiltinNativeCursorToolName, NativeReplayStrategy> = {
 	read: {
-		createDefinition: (cwd) => createReadToolDefinition(cwd) as AnyToolDefinition,
+		createDefinition: (cwd) => createPrimeCompatibleNativeToolDefinition("read", cwd),
 		renderReplayCall: renderReadReplayCall,
 		renderReplayResult: renderReadReplayResult,
 	},
-	bash: { createDefinition: (cwd) => createBashToolDefinition(cwd) as AnyToolDefinition },
+	bash: { createDefinition: (cwd) => createPrimeCompatibleNativeToolDefinition("bash", cwd) },
 	edit: {
-		createDefinition: (cwd) => createEditToolDefinition(cwd) as AnyToolDefinition,
+		createDefinition: (cwd) => createPrimeCompatibleNativeToolDefinition("edit", cwd),
 		missingReplayPolicy: "block-file-mutation",
 		renderReplayCall: (args, theme, context) =>
 			renderNativeLookingCursorFileMutationCall("edit", args as Record<string, unknown>, theme, context.isPartial),
 		renderReplayResult: renderEditReplayResult,
 	},
 	write: {
-		createDefinition: (cwd) => createWriteToolDefinition(cwd) as AnyToolDefinition,
+		createDefinition: (cwd) => createPrimeCompatibleNativeToolDefinition("write", cwd),
 		missingReplayPolicy: "block-file-mutation",
 		renderReplayCall: (args, theme, context) =>
 			renderNativeLookingCursorFileMutationCall("write", args as Record<string, unknown>, theme, context.isPartial),
 		renderReplayResult: renderWriteReplayResult,
 	},
-	grep: { createDefinition: (cwd) => createGrepToolDefinition(cwd) as AnyToolDefinition },
-	find: { createDefinition: (cwd) => createFindToolDefinition(cwd) as AnyToolDefinition },
-	ls: { createDefinition: (cwd) => createLsToolDefinition(cwd) as AnyToolDefinition },
+	grep: { createDefinition: (cwd) => createPrimeCompatibleNativeToolDefinition("grep", cwd) },
+	find: { createDefinition: (cwd) => createPrimeCompatibleNativeToolDefinition("find", cwd) },
+	ls: { createDefinition: (cwd) => createPrimeCompatibleNativeToolDefinition("ls", cwd) },
 };
 
 

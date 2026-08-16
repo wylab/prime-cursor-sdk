@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { arePiToolsDisabled } from "./cursor-active-tools.js";
+import { getCursorExtensionMode } from "./prime-compat.js";
 import {
 	CURSOR_MODEL_ACTIVE_REPLAY_TOOL_NAMES,
 	isNativeCursorToolName,
@@ -37,7 +38,8 @@ function hasNonBuiltinTool(pi: Pick<ExtensionAPI, "getAllTools">, toolName: Nati
 	return existingTool !== undefined && existingTool.sourceInfo.source !== "builtin";
 }
 
-type NativeRegistrationContext = Pick<ExtensionContext, "mode" | "model"> & {
+type NativeRegistrationContext = Pick<ExtensionContext, "model" | "hasUI"> & {
+	mode?: string;
 	ui: Pick<ExtensionContext["ui"], "notify">;
 };
 
@@ -60,7 +62,7 @@ function registerNativeCursorToolsFromSet(
 }
 
 function notifySkippedNativeCursorToolsIfNeeded(ctx: NativeRegistrationContext, skippedToolNames: readonly NativeCursorToolName[]): void {
-	if (skippedToolNames.length === 0 || readBooleanEnv(NATIVE_CURSOR_TOOL_DISPLAY_ENV) !== true || ctx.mode !== "tui") return;
+	if (skippedToolNames.length === 0 || readBooleanEnv(NATIVE_CURSOR_TOOL_DISPLAY_ENV) !== true || getCursorExtensionMode(ctx) !== "tui") return;
 	ctx.ui.notify(
 		`Cursor native tool replay skipped for ${skippedToolNames.join(", ")} because another extension already provides ${skippedToolNames.length === 1 ? "that tool" : "those tools"}. Cursor will use scrubbed activity transcripts for skipped tools.`,
 		"warning",
@@ -116,7 +118,7 @@ function ensureNativeCursorToolsRegisteredForModel(pi: CursorNativeToolRegistryA
 }
 
 function ensureThenSyncNativeCursorToolsForModel(pi: CursorNativeToolRegistryApi, ctx: NativeRegistrationContext): void {
-	const requested = isCursorNativeToolRegistrationRequested(ctx.mode);
+	const requested = isCursorNativeToolRegistrationRequested(getCursorExtensionMode(ctx));
 	setCursorNativeToolDisplayRuntimeRequested(requested);
 	if (!requested) {
 		removeRegisteredNonCoreNativeCursorTools(pi);

@@ -14,6 +14,8 @@ const packageJson = require("../package.json") as {
 	devDependencies: Record<string, string>;
 	peerDependencies: Record<string, string>;
 	bundledDependencies?: string[];
+	exports?: Record<string, string>;
+	pi?: { extensions?: string[] };
 	overrides?: Record<string, string>;
 };
 const packageLock = require("../package-lock.json") as {
@@ -76,6 +78,15 @@ describe("package metadata cutover baselines", () => {
 		expect(packageJson.dependencies["@cursor/sdk"]).toBe("1.0.23");
 		expect(lockPackageVersion("@cursor/sdk")).toBe("1.0.23");
 	});
+	it("exposes Prime and Pi runtime entrypoint aliases", () => {
+		expect(packageJson.exports).toMatchObject({
+			".": "./dist/prime-index.js",
+			"./prime": "./dist/prime-index.js",
+			"./prime-index": "./dist/prime-index.js",
+			"./pi": "./dist/index.js",
+		});
+		expect(packageJson.pi?.extensions).toEqual(["./dist/prime-index.js"]);
+	});
 
 	it("ships an exact MCP/Hono bundledDependencies closure for published installs", () => {
 		expect(packageJson.dependencies["@modelcontextprotocol/sdk"]).toBe("1.30.0");
@@ -123,11 +134,11 @@ describe("package metadata cutover baselines", () => {
 	});
 
 	it("packs an isolated MCP/Hono closure that beats a hostile host @hono/node-server", () => {
-		const tempRoot = mkdtempSync(join(tmpdir(), "pi-cursor-sdk-hono-bundle-"));
+		const tempRoot = mkdtempSync(join(tmpdir(), "prime-cursor-sdk-hono-bundle-"));
 		try {
 			const packOutput = npmPack(["pack", "--ignore-scripts", "--pack-destination", tempRoot], process.cwd());
 			const tarballName = packOutput.trim().split(/\r?\n/).at(-1)?.trim();
-			expect(tarballName).toMatch(/^pi-cursor-sdk-.*\.tgz$/);
+			expect(tarballName).toMatch(/^prime-cursor-sdk-.*\.tgz$/);
 
 			const listing = execFileSync("tar", ["-tzf", tarballName!], { cwd: tempRoot, encoding: "utf8" });
 			expect(listing).toContain("package/package.json");

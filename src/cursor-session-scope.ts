@@ -1,12 +1,9 @@
 import { resolve } from "node:path";
-import { parseArgs } from "@earendil-works/pi-coding-agent";
-import type { ExtensionHandler, ProjectTrustHandler, SessionInfoChangedEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import { isPrimeProjectTrusted } from "./prime-compat.js";
 import { truncateCursorDisplayLine } from "./cursor-display-text.js";
 
 interface CursorSessionScopeExtensionApi {
-	on(event: "project_trust", handler: ProjectTrustHandler): void;
-	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
-	on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): void;
+	on(event: string, handler: (...args: never[]) => unknown): void;
 }
 
 const ANONYMOUS_SESSION_SCOPE_KEY = "__anonymous__";
@@ -94,7 +91,15 @@ function recordProjectTrustResolution(cwd: string): void {
 }
 
 function isCliProjectTrustApproved(args = process.argv.slice(2)): boolean {
-	return parseArgs(args).projectTrustOverride === true;
+	let approved = false;
+	const valueOptions = new Set(["--model", "--provider", "--name", "--session", "--session-dir", "--config", "--api-key", "--mode", "--prompt", "--system-prompt", "--extension"]);
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index];
+		if (arg === "--approve" || arg === "-a" || arg === "--approve=true") approved = true;
+		if (arg === "--no-approve" || arg === "--approve=false") approved = false;
+		if (valueOptions.has(arg)) index += 1;
+	}
+	return approved;
 }
 
 function resetCursorSessionScope(): void {
@@ -115,25 +120,32 @@ export function onCursorSessionScopeKeyChange(handler: CursorSessionScopeChangeH
 }
 
 export function registerCursorSessionScope(pi: CursorSessionScopeExtensionApi): void {
-	pi.on("project_trust", (event) => {
+	// Prime ignores these legacy provenance events; the broad local `on` seam
+	// keeps the Pi implementation and its trust semantics intact.
+	pi.on("project_trust", (event: { cwd: string }) => {
 		recordProjectTrustResolution(event.cwd);
 		return { trusted: "undecided" };
 	});
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (_event: unknown, ctx: {
+		cwd: string;
+		sessionManager?: { getSessionFile?: () => string | undefined; getSessionId?: () => string | undefined; getSessionName?: () => string | undefined };
+		isProjectTrusted?: () => boolean;
+	}) => {
 		const previousScopeKey = getCursorSessionScopeKey();
+		const piProjectTrust = ctx.isProjectTrusted?.() === true
+			&& (projectTrustResolutionCwds.has(resolve(ctx.cwd)) || isCliProjectTrustApproved());
 		setCursorSessionScope(
 			ctx.cwd,
 			ctx.sessionManager?.getSessionFile?.() ?? undefined,
 			ctx.sessionManager?.getSessionId?.() ?? undefined,
-			ctx.isProjectTrusted?.() === true
-				&& (projectTrustResolutionCwds.has(resolve(ctx.cwd)) || isCliProjectTrustApproved()),
+			piProjectTrust || isPrimeProjectTrusted(),
 			ctx.sessionManager?.getSessionName?.() ?? undefined,
 		);
 		if (previousScopeKey !== getCursorSessionScopeKey()) {
 			await scopeChangeHandler?.(previousScopeKey);
 		}
 	});
-	pi.on("session_info_changed", (event) => {
+	pi.on("session_info_changed", (event: { name?: string }) => {
 		state.sessionName = normalizeCursorSessionName(event.name);
 	});
 }

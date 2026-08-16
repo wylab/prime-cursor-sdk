@@ -7,8 +7,8 @@ import type {
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
-	ToolInfo,
 	ToolResultEvent,
+	SourceInfo,
 } from "@earendil-works/pi-coding-agent";
 
 export type CursorPiToolBridgeSnapshotApi = Pick<ExtensionAPI, "getActiveTools" | "getAllTools">;
@@ -30,9 +30,9 @@ export interface CursorPiBridgeToolDefinition {
 	piToolName: string;
 	mcpToolName: string;
 	description: string;
-	promptGuidelines?: ToolInfo["promptGuidelines"];
+	promptGuidelines?: string[];
 	inputSchema: CursorPiMcpInputSchema;
-	sourceInfo: ToolInfo["sourceInfo"];
+	sourceInfo: SourceInfo;
 }
 
 export interface CursorPiToolBridgeSnapshot {

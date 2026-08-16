@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0 - 2026-08-16
+
+### Added
+
+- Added a Prime Agent entry point backed by the direct Cursor SDK.
+- Added Prime project configuration paths and provider-conflict handling.
+- Added an isolated Prime JSONL smoke test.
+
 ## 0.3.3 - 2026-08-14
 
 ### Changed

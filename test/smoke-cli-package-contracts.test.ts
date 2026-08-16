@@ -333,10 +333,12 @@ if (!windows.includes("for($i=0;$i -lt 10") || !windows.includes("$w=$e.Replace(
 	it("packages smoke scripts and platform smoke docs", () => {
 		const result = run("npm", ["pack", "--dry-run", "--json"]);
 		expect(result.status).toBe(0);
-		const [pack] = JSON.parse(result.stdout) as Array<{ name: string; version: string; files: Array<{ path: string }> }>;
+		const parsedPack = JSON.parse(result.stdout) as Array<{ name: string; version: string; files: Array<{ path: string }> }> | Record<string, { name: string; version: string; files: Array<{ path: string }> }>;
+		const pack = Array.isArray(parsedPack) ? parsedPack[0] : Object.values(parsedPack)[0];
+		expect(pack).toBeDefined();
 		const paths = new Set(pack.files.map((file) => file.path));
 
-		expect(pack.name).toBe("pi-cursor-sdk");
+		expect(pack.name).toBe("prime-cursor-sdk");
 		expect(paths.has("scripts/tmux-live-smoke.sh")).toBe(true);
 		expect(paths.has("scripts/isolated-cursor-smoke.sh")).toBe(true);
 		expect(paths.has("scripts/fixtures/plan-strip-shim/index.ts")).toBe(true);
@@ -345,6 +347,9 @@ if (!windows.includes("for($i=0;$i -lt 10") || !windows.includes("$w=$e.Replace(
 		expect(paths.has("scripts/validate-smoke-jsonl.mjs")).toBe(true);
 		expect(paths.has("scripts/debug-sdk-events.mjs")).toBe(true);
 		expect(paths.has("scripts/debug-provider-events.mjs")).toBe(true);
+		expect(paths.has("scripts/prime-smoke.mjs")).toBe(true);
+		expect(paths.has("scripts/prime-package-smoke.mjs")).toBe(true);
+		expect(paths.has("scripts/typecheck-prime.mjs")).toBe(true);
 		expect(paths.has("platform-smoke.config.mjs")).toBe(true);
 		expect(paths.has("scripts/platform-smoke/artifact-bundle-chunk.mjs")).toBe(true);
 		expect(paths.has("scripts/platform-smoke/live-suite-runner.mjs")).toBe(true);

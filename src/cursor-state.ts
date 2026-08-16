@@ -25,6 +25,7 @@ import {
 	resolveCursorSettingSources,
 } from "./cursor-setting-sources.js";
 import { isCursorModel } from "./cursor-model.js";
+import { getCursorExtensionMode } from "./prime-compat.js";
 import { registerCursorModelLifecycle } from "./cursor-model-lifecycle.js";
 import { asRecord } from "./cursor-record-utils.js";
 import { getCursorSessionScopeKey } from "./cursor-session-scope.js";
@@ -251,7 +252,7 @@ export function getCursorProviderAgentModeOrThrow(): AgentModeOption {
 	return resolution.mode;
 }
 
-type CursorStatusContext = Pick<ExtensionContext, "cwd"> & Partial<Pick<ExtensionContext, "isProjectTrusted">>;
+type CursorStatusContext = Pick<ExtensionContext, "cwd"> & { isProjectTrusted?: () => boolean; };
 
 function updateCursorStatus(ctx: CursorStatusContext & Pick<ExtensionContext, "model" | "ui">, model = ctx.model): void {
 	if (!model || !isCursorModel(model)) {
@@ -360,9 +361,9 @@ function restoreCliCursorMode(raw: boolean | string | undefined): void {
 	cliCursorModeState = { kind: "invalid", raw: rawText, message };
 }
 
-function notifyInvalidCursorModeIfCursorActive(ctx: Pick<ExtensionContext, "hasUI" | "mode" | "ui">): void {
+function notifyInvalidCursorModeIfCursorActive(ctx: Pick<ExtensionContext, "hasUI" | "ui">): void {
 	const modeResolution = resolveCursorAgentMode();
-	if (modeResolution.kind !== "invalid" || !ctx.hasUI || ctx.mode !== "tui") return;
+	if (modeResolution.kind !== "invalid" || !ctx.hasUI || getCursorExtensionMode(ctx) !== "tui") return;
 	const scopeKey = getCursorSessionScopeKey();
 	if (invalidCursorModeNotifiedSessionScopeKeys.has(scopeKey)) return;
 	invalidCursorModeNotifiedSessionScopeKeys.add(scopeKey);

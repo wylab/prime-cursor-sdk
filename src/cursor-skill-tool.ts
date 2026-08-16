@@ -61,7 +61,7 @@ function getAvailableSkillNames(): string[] {
 
 function resolveEffectiveRuntimeForSkillLifecycle(
 	cursorModel: boolean,
-	ctx: Pick<ExtensionContext, "cwd"> & Partial<Pick<ExtensionContext, "isProjectTrusted">>,
+	ctx: Pick<ExtensionContext, "cwd"> & { isProjectTrusted?: () => boolean },
 ): CursorRuntime {
 	return cursorModel ? resolveEffectiveCursorConfigForContext(ctx).runtime.value : "local";
 }
