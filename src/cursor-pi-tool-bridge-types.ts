@@ -76,6 +76,7 @@ export interface CursorPiToolBridge {
 	getToolSurfaceSignature(): string;
 	createRun(options?: CursorPiToolBridgeRunOptions): Promise<CursorPiToolBridgeRun>;
 	disposeAll(reason?: string): Promise<void>;
+	disposeRunsCreatedBy?(pi: CursorPiToolBridgeSnapshotApi, reason: string): Promise<void>;
 	/** Rebind tool-surface snapshots when a concurrent session reuses this registry. */
 	setSnapshotApi?(pi: CursorPiToolBridgeSnapshotApi): void;
 	getEndpointCount?(): number;

@@ -23,6 +23,7 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 	private pi: CursorPiToolBridgeSnapshotApi;
 	private readonly env: Record<string, string | undefined>;
 	private readonly runs = new Set<CursorPiToolBridgeRunImpl>();
+	private readonly runCreators = new Map<CursorPiToolBridgeRunImpl, CursorPiToolBridgeSnapshotApi>();
 	private readonly routes = new Map<string, CursorPiToolBridgeRunImpl>();
 	private httpServer?: HttpServer;
 	private listenPromise?: Promise<void>;
@@ -62,6 +63,7 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 		const { CursorPiToolBridgeRunImpl } = await import("./cursor-pi-tool-bridge-run.js");
 		const run = new CursorPiToolBridgeRunImpl(this, this.env, snapshot, bridgeEnabled && snapshot.tools.length > 0, options);
 		this.runs.add(run);
+		this.runCreators.set(run, this.pi);
 		await run.start();
 		run.emitStartDiagnostics(bridgeEnabled);
 		return run;
@@ -69,6 +71,14 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 
 	async disposeAll(reason = "Cursor pi tool bridge disposed"): Promise<void> {
 		await Promise.all([...this.runs].map(async (run) => {
+			run.cancel(reason);
+			await run.dispose();
+		}));
+	}
+
+	async disposeRunsCreatedBy(pi: CursorPiToolBridgeSnapshotApi, reason: string): Promise<void> {
+		const owned = [...this.runs].filter((run) => this.runCreators.get(run) === pi);
+		await Promise.all(owned.map(async (run) => {
 			run.cancel(reason);
 			await run.dispose();
 		}));
@@ -85,6 +95,7 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 	async unregisterRun(pathname: string, run: CursorPiToolBridgeRunImpl): Promise<void> {
 		if (this.routes.get(pathname) === run) this.routes.delete(pathname);
 		this.runs.delete(run);
+		this.runCreators.delete(run);
 		if (this.routes.size === 0) await this.closeHttpServer();
 	}
 

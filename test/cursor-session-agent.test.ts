@@ -1,4 +1,5 @@
 import { toNamespacedPath } from "node:path";
+import type { SDKAgent } from "@cursor/sdk";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeCursorContextFingerprint, shouldBootstrapCursorContext } from "../src/context.js";
 import { createEventHarness, createExtensionTestContext, makeContext } from "./helpers/pi-harness.js";
@@ -9,6 +10,7 @@ import {
 	__testUtils as sessionAgentTestUtils,
 } from "../src/cursor-session-agent.js";
 import { registerCursorSessionAgentLifecycle } from "../src/cursor-session-agent-lifecycle.js";
+import { cursorLiveRuns } from "../src/cursor-provider-live-run-drain.js";
 import { installCursorSessionStoreMock } from "./helpers/cursor-session-store.js";
 import { buildCursorSessionStateRoot } from "../src/cursor-session-store.js";
 
@@ -648,6 +650,140 @@ describe("cursor-session-agent", () => {
 		expect(sessionAgentTestUtils.sessionAgentsByScope.has("/tmp/sessions/test.jsonl")).toBe(true);
 		await pi.runSessionShutdown({ reason: "quit" });
 		expect(sessionAgentTestUtils.sessionAgentsByScope.has("/tmp/sessions/test.jsonl")).toBe(false);
+		expect(mockDispose).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not dispose the current parent scope when a child session_shutdown fires", async () => {
+		const parentDispose = vi.fn().mockResolvedValue(undefined);
+		const childDispose = vi.fn().mockResolvedValue(undefined);
+		const createParent = vi.fn().mockResolvedValue({
+			agentId: "parent-agent",
+			[Symbol.asyncDispose]: parentDispose,
+		});
+		const createChild = vi.fn().mockResolvedValue({
+			agentId: "child-agent",
+			[Symbol.asyncDispose]: childDispose,
+		});
+		const pi = createEventHarness();
+		const parentFile = "/tmp/sessions/parent.jsonl";
+		const childFile = "/tmp/sessions/child.jsonl";
+
+		registerCursorSessionAgentLifecycle(pi);
+		cursorSessionScopeTestUtils.set("/tmp/project", parentFile);
+		await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent" as const,
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			createAgent: createParent,
+		});
+		cursorSessionScopeTestUtils.set("/tmp/project", childFile);
+		await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent" as const,
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			createAgent: createChild,
+		});
+		cursorSessionScopeTestUtils.set("/tmp/project", parentFile);
+
+		expect(sessionAgentTestUtils.sessionAgentsByScope.has(parentFile)).toBe(true);
+		expect(sessionAgentTestUtils.sessionAgentsByScope.has(childFile)).toBe(true);
+		await pi.runSessionShutdown(
+			{ reason: "quit" },
+			{ sessionManager: { getSessionFile: () => childFile, getSessionId: () => "child" } },
+		);
+		expect(sessionAgentTestUtils.sessionAgentsByScope.has(parentFile)).toBe(true);
+		expect(sessionAgentTestUtils.sessionAgentsByScope.has(childFile)).toBe(false);
+		expect(parentDispose).not.toHaveBeenCalled();
+		expect(childDispose).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not dispose a parent live run when a child session_shutdown fires", async () => {
+		const parentDispose = vi.fn().mockResolvedValue(undefined);
+		const childDispose = vi.fn().mockResolvedValue(undefined);
+		const parentAgent = {
+			agentId: "parent-agent",
+			send: vi.fn(),
+			[Symbol.asyncDispose]: parentDispose,
+		};
+		const createParent = vi.fn().mockResolvedValue(parentAgent);
+		const createChild = vi.fn().mockResolvedValue({
+			agentId: "child-agent",
+			[Symbol.asyncDispose]: childDispose,
+		});
+		const pi = createEventHarness();
+		const parentFile = "/tmp/sessions/parent.jsonl";
+		const childFile = "/tmp/sessions/child.jsonl";
+
+		registerCursorSessionAgentLifecycle(pi);
+		cursorSessionScopeTestUtils.set("/tmp/project", parentFile);
+		await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent" as const,
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			createAgent: createParent,
+		});
+		const liveRun = cursorLiveRuns.start({
+			id: "cursor-replay-parent-ipython",
+			agent: parentAgent as unknown as SDKAgent,
+			sessionAgentScopeKey: parentFile,
+			promptInputTokens: 0,
+		});
+		cursorSessionScopeTestUtils.set("/tmp/project", childFile);
+		await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent" as const,
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			createAgent: createChild,
+		});
+		cursorSessionScopeTestUtils.set("/tmp/project", parentFile);
+
+		await pi.runSessionShutdown(
+			{ reason: "quit" },
+			{ sessionManager: { getSessionFile: () => childFile, getSessionId: () => "child" } },
+		);
+		expect(sessionAgentTestUtils.sessionAgentsByScope.has(parentFile)).toBe(true);
+		expect(sessionAgentTestUtils.sessionAgentsByScope.has(childFile)).toBe(false);
+		expect(parentDispose).not.toHaveBeenCalled();
+		expect(childDispose).toHaveBeenCalledTimes(1);
+		await cursorLiveRuns.release(liveRun);
+	});
+
+	it("disposes the shutdown scope even when it owns an in-flight live run", async () => {
+		const mockDispose = vi.fn().mockResolvedValue(undefined);
+		const agent = {
+			agentId: "parent-agent",
+			send: vi.fn(),
+			[Symbol.asyncDispose]: mockDispose,
+		};
+		const createAgent = vi.fn().mockResolvedValue(agent);
+		const pi = createEventHarness();
+		const parentFile = "/tmp/sessions/parent.jsonl";
+
+		registerCursorSessionAgentLifecycle(pi);
+		cursorSessionScopeTestUtils.set("/tmp/project", parentFile);
+		await acquireSessionCursorAgent({
+			apiKey: "test-key",
+			agentMode: "agent" as const,
+			cwd: "/tmp/project",
+			modelSelection: { id: "composer-2.5" },
+			createAgent,
+		});
+		cursorLiveRuns.start({
+			id: "cursor-replay-parent-ipython",
+			agent: agent as unknown as SDKAgent,
+			sessionAgentScopeKey: parentFile,
+			promptInputTokens: 0,
+		});
+
+		await pi.runSessionShutdown(
+			{ reason: "quit" },
+			{ sessionManager: { getSessionFile: () => parentFile, getSessionId: () => "parent" } },
+		);
+		expect(sessionAgentTestUtils.sessionAgentsByScope.has(parentFile)).toBe(false);
 		expect(mockDispose).toHaveBeenCalledTimes(1);
 	});
 

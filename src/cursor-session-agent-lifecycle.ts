@@ -7,7 +7,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { clearCursorSdkHttp1 } from "./cursor-http1.js";
 import { cursorLiveRuns } from "./cursor-provider-live-run-drain.js";
-import { onCursorSessionScopeKeyChange } from "./cursor-session-scope.js";
+import {
+	cursorSessionScopeKeyFromSessionManager,
+	getCursorSessionScopeKey,
+	onCursorSessionScopeKeyChange,
+} from "./cursor-session-scope.js";
 import {
 	disposeSessionCursorAgent,
 	invalidateSessionAgent,
@@ -43,13 +47,19 @@ export function registerCursorSessionAgentLifecycle(pi: CursorSessionAgentLifecy
 		}
 		await disposeSessionCursorAgent(previousScopeKey);
 	});
-	pi.on("session_shutdown", async (event) => {
+	pi.on("session_shutdown", async (event, ctx) => {
 		try {
-			if (event.reason === "reload") {
-				await resetSessionCursorAgent();
+			const shutdownScope =
+				cursorSessionScopeKeyFromSessionManager(ctx?.sessionManager) ?? getCursorSessionScopeKey();
+			if (event?.reason === "reload") {
+				await resetSessionCursorAgent(shutdownScope);
 				return;
 			}
-			await disposeSessionCursorAgent();
+			// Child closed:killed fires session_shutdown on that child's ExtensionAPI.
+			// disposeSessionCursorAgent() without a key used the process-global
+			// current scope, which stays on the parent during delete_subagent
+			// from an in-flight parent pi__ipython.
+			await disposeSessionCursorAgent(shutdownScope);
 		} finally {
 			clearCursorSdkHttp1();
 		}

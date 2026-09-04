@@ -1,5 +1,6 @@
 interface CursorPiToolBridgeActiveToolExecution {
 	toolCallId: string;
+	host?: object;
 	abort: () => Promise<void> | void;
 	cancelPending: (reason: string) => void;
 	signal?: AbortSignal;
@@ -13,6 +14,7 @@ class CursorPiToolBridgeToolExecutionAbortTracker {
 	track(
 		toolCallId: string,
 		options: {
+			host?: object;
 			signal?: AbortSignal;
 			abort: () => Promise<void> | void;
 			cancelPending: (reason: string) => void;
@@ -21,6 +23,7 @@ class CursorPiToolBridgeToolExecutionAbortTracker {
 		this.finish(toolCallId);
 		const execution: CursorPiToolBridgeActiveToolExecution = {
 			toolCallId,
+			host: options.host,
 			abort: options.abort,
 			cancelPending: options.cancelPending,
 			signal: options.signal,
@@ -66,6 +69,14 @@ class CursorPiToolBridgeToolExecutionAbortTracker {
 	abortAll(reason: string): void {
 		for (const execution of [...this.activeExecutions.values()]) {
 			this.abort(execution.toolCallId, reason);
+		}
+	}
+
+	abortAllForHost(host: object, reason: string): void {
+		for (const execution of [...this.activeExecutions.values()]) {
+			if (execution.host === host) {
+				this.abort(execution.toolCallId, reason);
+			}
 		}
 	}
 

@@ -12,6 +12,7 @@ import type {
 	ToolResultEvent,
 	TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import { getCursorSessionFile, getCursorSessionScopeKey } from "../../src/cursor-session-scope.js";
 import { createDefaultSystemPromptOptions, createExtensionTestContext, makeAssistantMessage } from "./context-fixtures.js";
 import type {
 	EventHarness,
@@ -264,10 +265,25 @@ function createHarnessEventApi(): EventHarness {
 		eventOverrides: Partial<HarnessEventMap["session_shutdown"]> = {},
 		ctxOverrides: ExtensionContextOverrides = {},
 	): Promise<void> => {
+		const currentFile = getCursorSessionFile();
+		const currentKey = getCursorSessionScopeKey();
+		const ephemeralPrefix = "__ephemeral__:";
+		const currentId = currentFile
+			? undefined
+			: currentKey.startsWith(ephemeralPrefix)
+				? currentKey.slice(ephemeralPrefix.length)
+				: undefined;
 		await invokeEvent(
 			"session_shutdown",
 			{ type: "session_shutdown", reason: "quit", ...eventOverrides },
-			ctxOverrides,
+			{
+				...ctxOverrides,
+				sessionManager: {
+					getSessionFile: () => currentFile ?? "",
+					getSessionId: () => currentId ?? "test-session",
+					...ctxOverrides.sessionManager,
+				},
+			},
 		);
 	};
 

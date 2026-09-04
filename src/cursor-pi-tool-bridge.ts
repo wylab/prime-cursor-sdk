@@ -115,6 +115,7 @@ function attachCursorPiToolBridgeHandlers(
 		}
 		const windowsAbortMarker = installWindowsBridgeBashAbortMarker(event);
 		const trackingStarted = bridgeToolExecutionAbortTracker.track(event.toolCallId, {
+			host: pi,
 			signal: ctx.signal,
 			abort: () => {
 				ctx.abort();
@@ -138,13 +139,16 @@ function attachCursorPiToolBridgeHandlers(
 			return;
 		}
 		const reason = `Cursor pi tool bridge session shutdown: ${event.reason}`;
-		// Concurrent RLM sessions share one worker-global registry. A child
-		// session_shutdown (or a second extension register) must not disposeAll
-		// and cancel the parent's in-flight pi__ipython. Per-scope agent dispose
-		// already tears down that session's bridgeRun. Only reload replaces the
-		// whole registry.
+		// Abort only this ExtensionAPI's in-flight tools. A child session_shutdown
+		// must not abortAll and cancel the parent's pending pi__ipython.
+		bridgeToolExecutionAbortTracker.abortAllForHost(pi, reason);
+		// Concurrent RLM sessions share one worker-global registry. Only reload
+		// replaces the whole registry. Same-session shutdown still cancels runs
+		// this ExtensionAPI created (pending MCP waits). Child shutdown must
+		// not cancel the parent's runs.
 		if (event.reason !== "reload") {
 			logBridgeSkip(`skip-shutdown-disposeAll reason=${event.reason} endpoints=${bridge.getEndpointCount()}`);
+			await bridge.disposeRunsCreatedBy(pi, reason);
 			return;
 		}
 		bridgeToolExecutionAbortTracker.abortAll(reason);

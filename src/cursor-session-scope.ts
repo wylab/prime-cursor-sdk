@@ -43,6 +43,17 @@ export function getCursorSessionScopeKey(): string {
 	return ANONYMOUS_SESSION_SCOPE_KEY;
 }
 
+export function cursorSessionScopeKeyFromSessionManager(sessionManager?: {
+	getSessionFile?: () => string | undefined;
+	getSessionId?: () => string | undefined;
+}): string | undefined {
+	const sessionFile = sessionManager?.getSessionFile?.();
+	if (sessionFile) return sessionFile;
+	const sessionId = sessionManager?.getSessionId?.();
+	if (sessionId) return `${EPHEMERAL_SESSION_SCOPE_PREFIX}${sessionId}`;
+	return undefined;
+}
+
 export function getCursorSessionScopeGeneration(scopeKey: string = getCursorSessionScopeKey()): number {
 	return scopeGenerations.get(scopeKey) ?? 0;
 }

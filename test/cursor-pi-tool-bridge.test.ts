@@ -851,6 +851,53 @@ describe("cursor pi tool bridge loopback MCP lifecycle", () => {
 		}
 	});
 
+	it("does not abort a parent bridged tool when a child session shuts down", async () => {
+		const parentPi = createBridgePiHarness({
+			active: ["bash"],
+			tools: [createBuiltinToolInfo("bash", Type.Object({ command: Type.String() }), "Run shell commands")],
+		});
+		const childPi = createBridgePiHarness({
+			active: ["read"],
+			tools: [createToolInfo("read")],
+		});
+		process.env.PI_CURSOR_EXPOSE_BUILTIN_TOOLS = "1";
+		const bridge = registerCursorPiToolBridge(parentPi);
+		const run = await bridge.createRun();
+		const { client, transport } = await connectClient(getCursorPiBridgeMcpUrl(run));
+		try {
+			const callPromise = client.callTool({ name: "pi__bash", arguments: { command: "sleep 30" } });
+			const observedCallError = callPromise.catch((error: unknown) => error);
+			const [request] = await waitForQueuedRequests(run);
+			const agentAbort = vi.fn();
+			const bashInput = request.args as { command: string };
+
+			await parentPi.runToolCall(
+				{
+					type: "tool_call",
+					toolCallId: request.piToolCallId,
+					toolName: "bash",
+					input: bashInput,
+				},
+				{
+					signal: new AbortController().signal,
+					abort: agentAbort,
+				},
+			);
+			expect(__testUtils.getActiveBridgeToolExecutionAbortCount()).toBe(1);
+
+			registerCursorPiToolBridge(childPi);
+			await childPi.runSessionShutdown({ reason: "quit" });
+
+			expect(agentAbort).not.toHaveBeenCalled();
+			expect(__testUtils.getActiveBridgeToolExecutionAbortCount()).toBe(1);
+			expect(await Promise.race([observedCallError, Promise.resolve("pending")])).toBe("pending");
+		} finally {
+			await client.close().catch(() => undefined);
+			await transport.close().catch(() => undefined);
+			await run.dispose();
+		}
+	});
+
 	it("rejects MCP calls and clears pending state when immediate tool dispatch throws", async () => {
 		const diagnostics = collectBridgeDiagnosticOutput();
 		const registry = __testUtils.createRegistry(
