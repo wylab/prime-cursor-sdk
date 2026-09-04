@@ -98,6 +98,32 @@ describe("cursor_ask_question abort vs user cancel", () => {
 		expect(result.content).toEqual([{ type: "text", text: CURSOR_ASK_QUESTION_HOST_ABORT_TEXT }]);
 		expect(result.details).toMatchObject({ cancelled: false, aborted: true });
 		expect(String(result.content[0]?.type === "text" ? result.content[0].text : "")).not.toContain("User cancelled");
+		expect(select).toHaveBeenCalledWith("Proceed?", ["Yes", "No"], { signal: controller.signal });
+	});
+
+	it("does not blame the user when UI settles cancelled then host abort races before return", async () => {
+		const pi = createExtensionPi();
+		await extensionFactory(pi);
+		await pi.runSessionStart();
+
+		const controller = new AbortController();
+		const select = vi.fn().mockResolvedValue(undefined);
+		const tool = pi._tools.find((candidate) => candidate.name === CURSOR_ASK_QUESTION_TOOL_NAME);
+
+		const executePromise = tool!.execute(
+			"question-abort-after-cancel-settle",
+			{ question: "Proceed?", options: ["Yes", "No"], allowCustom: false },
+			controller.signal,
+			undefined,
+			createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select, input: vi.fn() } }),
+		);
+		await Promise.resolve();
+		controller.abort();
+		const result = await executePromise;
+
+		expect(result.content).toEqual([{ type: "text", text: CURSOR_ASK_QUESTION_HOST_ABORT_TEXT }]);
+		expect(result.details).toMatchObject({ cancelled: false, aborted: true });
+		expect(String(result.content[0]?.type === "text" ? result.content[0].text : "")).not.toContain("User cancelled");
 	});
 
 	it("does not blame the user when the UI rejects with an abort-like error", async () => {

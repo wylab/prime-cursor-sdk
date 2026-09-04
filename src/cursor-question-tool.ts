@@ -200,13 +200,13 @@ async function askOneQuestion(
 			const labels = question.options.map((option) => option.description ? `${option.label} — ${option.description}` : option.label);
 			const customLabel = "Type a custom answer";
 			const choices = question.allowCustom ? [...labels, customLabel] : labels;
-			const selected = await ctx.ui.select(question.question, choices);
+			const selected = await ctx.ui.select(question.question, choices, signal ? { signal } : undefined);
 			assertAskQuestionNotAborted(signal);
 			if (!selected) {
 				return { id: question.id, question: question.question, answer: null, wasCustom: false, cancelled: true };
 			}
 			if (selected === customLabel) {
-				const customAnswer = await ctx.ui.input(question.question, "Type your answer");
+				const customAnswer = await ctx.ui.input(question.question, "Type your answer", signal ? { signal } : undefined);
 				assertAskQuestionNotAborted(signal);
 				const trimmed = customAnswer?.trim();
 				return trimmed
@@ -226,7 +226,7 @@ async function askOneQuestion(
 			};
 		}
 
-		const answer = await ctx.ui.input(question.question, "Type your answer");
+		const answer = await ctx.ui.input(question.question, "Type your answer", signal ? { signal } : undefined);
 		assertAskQuestionNotAborted(signal);
 		const trimmed = answer?.trim();
 		return trimmed
@@ -297,6 +297,9 @@ export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): 
 					answers.push(answer);
 					if (answer.cancelled) break;
 				}
+
+				// Host abort can race after a cancelled UI result settles but before we return.
+				assertAskQuestionNotAborted(signal);
 
 				return {
 					content: [{ type: "text" as const, text: summarizeAnswers(answers) }],
