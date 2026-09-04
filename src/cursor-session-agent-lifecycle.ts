@@ -30,11 +30,12 @@ export function registerCursorSessionAgentLifecycle(pi: CursorSessionAgentLifecy
 		// in-flight parent pi__ipython as rejectionKind "cancelled" / "Request was aborted".
 		// Keep the previous-scope agent while any live run is still open; shutdown /
 		// tree / reload paths still dispose.
+		// Only skip when the previous scope still owns an active live run.
+		// A global liveCount>0 gate over-retains idle prior-scope agents.
 		const activeForPrevious = cursorLiveRuns.getActiveForScope(previousScopeKey);
-		const liveCount = cursorLiveRuns.count();
-		if (activeForPrevious || liveCount > 0) {
+		if (activeForPrevious) {
 			console.error(
-				`[pi-cursor-sdk:lifecycle] skip-dispose previous=${previousScopeKey} activeForPrevious=${Boolean(activeForPrevious)} liveCount=${liveCount}`,
+				`[pi-cursor-sdk:lifecycle] skip-dispose previous=${previousScopeKey} activeForPrevious=true`,
 			);
 			return;
 		}

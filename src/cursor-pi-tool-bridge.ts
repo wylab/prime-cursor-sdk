@@ -47,6 +47,8 @@ export {
 } from "./cursor-pi-tool-bridge-snapshot.js";
 
 let registeredCursorPiToolBridge: CursorPiToolBridgeRegistry | undefined;
+/** Tracks which bridge instance already has handlers on a given ExtensionAPI host. */
+const cursorPiToolBridgeHandlersByHost = new WeakMap<object, CursorPiToolBridgeRegistry>();
 
 const WINDOWS_BRIDGE_ABORT_ENV = "PI_CURSOR_BRIDGE_TOOL_CALL_ID";
 
@@ -92,6 +94,11 @@ function attachCursorPiToolBridgeHandlers(
 	pi: CursorPiToolBridgeExtensionApi,
 	bridge: CursorPiToolBridgeRegistry,
 ): void {
+	// Each session has its own ExtensionAPI event bus. Attach once per (pi, bridge)
+	// so child sessions get handlers without stacking duplicates on the same host,
+	// while a post-reload new registry can re-bind the same pi.
+	if (cursorPiToolBridgeHandlersByHost.get(pi) === bridge) return;
+	cursorPiToolBridgeHandlersByHost.set(pi, bridge);
 	pi.on("tool_call", (event, ctx) => {
 		if (registeredCursorPiToolBridge !== bridge) return undefined;
 		if (!bridge.hasPendingPiToolCallId(event.toolCallId)) {
@@ -148,10 +155,12 @@ export function registerCursorPiToolBridge(pi: CursorPiToolBridgeExtensionApi): 
 		// (rejectionKind "cancelled" / "Request was aborted") even after scope
 		// dispose was skipped. Keep the live registry whenever one already exists:
 		// endpointCount can be 0 briefly (or for non-HTTP waiters) while a parent
-		// pi__ipython CallTool is still in flight.
+		// pi__ipython CallTool is still in flight. Rebind snapshots to this
+		// session's ExtensionAPI and attach handlers only if this `pi` is new.
 		console.error(
 			`[pi-cursor-sdk:bridge] skip-reregister-dispose endpoints=${existing.getEndpointCount()}`,
 		);
+		existing.setSnapshotApi(pi);
 		attachCursorPiToolBridgeHandlers(pi, existing);
 		return existing;
 	}

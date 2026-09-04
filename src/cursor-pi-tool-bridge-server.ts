@@ -20,7 +20,7 @@ export const LOOPBACK_HOST = "127.0.0.1";
 const HTTP_SERVER_CLOSE_GRACE_MS = 250;
 
 export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
-	private readonly pi: CursorPiToolBridgeSnapshotApi;
+	private pi: CursorPiToolBridgeSnapshotApi;
 	private readonly env: Record<string, string | undefined>;
 	private readonly runs = new Set<CursorPiToolBridgeRunImpl>();
 	private readonly routes = new Map<string, CursorPiToolBridgeRunImpl>();
@@ -33,6 +33,11 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 	) {
 		this.pi = pi;
 		this.env = env;
+	}
+
+	/** Rebind tool-surface snapshots to the session that just registered the extension. */
+	setSnapshotApi(pi: CursorPiToolBridgeSnapshotApi): void {
+		this.pi = pi;
 	}
 
 	isEnabled(): boolean {
