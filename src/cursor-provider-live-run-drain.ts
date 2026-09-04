@@ -8,6 +8,7 @@ import {
 import { scheduler } from "node:timers/promises";
 import {
 	CursorLiveRunAbortError,
+	DEFAULT_CURSOR_LIVE_RUN_PROGRESS_STALL_MS,
 	createCursorLiveRunCoordinator,
 	hasTrailingUserMessagesAfterToolResults,
 	type CursorLiveQueuedEvent,
@@ -19,7 +20,7 @@ import {
 	type CursorNativeToolDisplayItem,
 } from "./cursor-native-tool-display-state.js";
 import { type CursorPiBridgeToolRequest } from "./cursor-pi-tool-bridge.js";
-import { resetSessionCursorAgent } from "./cursor-session-agent.js";
+import { invalidateSessionAgent, resetSessionCursorAgent } from "./cursor-session-agent.js";
 import { applyCursorUsage } from "./cursor-usage-accounting.js";
 import { CursorPartialContentEmitter } from "./cursor-partial-content-emitter.js";
 import { emitDisplayOnlyTraceBlock } from "./cursor-display-only-trace.js";
@@ -30,6 +31,7 @@ import { partitionNativeToolsByActiveContext } from "./cursor-native-replay-rout
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
 
 export const DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS = 5 * 60 * 1000;
+export { DEFAULT_CURSOR_LIVE_RUN_PROGRESS_STALL_MS };
 const CURSOR_NATIVE_REPLAY_TOOL_ID_PATTERN = /^(cursor-replay-\d+-\d+)-tool-\d+$/;
 
 interface CursorLiveTurnState {
@@ -37,6 +39,7 @@ interface CursorLiveTurnState {
 	emittedText: string;
 }
 let cursorNativeReplayIdleDisposeMs = DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS;
+let cursorLiveRunProgressStallMs = DEFAULT_CURSOR_LIVE_RUN_PROGRESS_STALL_MS;
 
 type CursorLiveRunDrainMode = "emit" | "chain_user_input";
 type CursorLiveRunDrainOutcome = "tool_use" | "stop" | "error" | "aborted" | "chain_user_input";
@@ -46,11 +49,13 @@ let cursorNativeReplayCounter = 0;
 
 export async function abandonSessionCursorAgent(scopeKey: string | undefined): Promise<void> {
 	if (!scopeKey) return;
+	invalidateSessionAgent(scopeKey, { deadTransport: true });
 	await resetSessionCursorAgent(scopeKey);
 }
 
 export const cursorLiveRuns = createCursorLiveRunCoordinator({
 	getIdleDisposeMs: () => cursorNativeReplayIdleDisposeMs,
+	getProgressStallMs: () => cursorLiveRunProgressStallMs,
 	deleteNativeToolDisplay: deleteCursorNativeToolDisplay,
 	abandonSessionAgent: (scopeKey) => abandonSessionCursorAgent(scopeKey),
 });
@@ -487,6 +492,14 @@ export function setCursorNativeReplayIdleDisposeMs(value: number): void {
 
 export function resetCursorNativeReplayIdleDisposeMs(): void {
 	cursorNativeReplayIdleDisposeMs = DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS;
+}
+
+export function setCursorLiveRunProgressStallMs(value: number): void {
+	cursorLiveRunProgressStallMs = value;
+}
+
+export function resetCursorLiveRunProgressStallMs(): void {
+	cursorLiveRunProgressStallMs = DEFAULT_CURSOR_LIVE_RUN_PROGRESS_STALL_MS;
 }
 
 export async function releaseAllPendingCursorLiveRunsForTests(): Promise<void> {

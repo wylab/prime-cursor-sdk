@@ -23,6 +23,9 @@ export class CursorLiveRunAbortError extends Error {
 	}
 }
 
+export const DEFAULT_CURSOR_LIVE_RUN_PROGRESS_STALL_MS = 5 * 60 * 1000;
+export const CURSOR_LIVE_RUN_STALL_ERROR_PREFIX = "Cursor live run stalled: no progress for ";
+
 export type CursorLiveQueuedEvent =
 	| { type: "thinking-delta"; text: string }
 	| { type: "thinking-completed" }
@@ -72,6 +75,7 @@ export interface CursorLiveRunCreateParams {
 export interface CursorLiveRunCoordinatorDeps {
 	getScopeKey?: () => string;
 	getIdleDisposeMs: () => number;
+	getProgressStallMs?: () => number;
 	deleteNativeToolDisplay: (id: string) => void;
 	abandonSessionAgent: (scopeKey: string | undefined) => Promise<void>;
 }
@@ -449,10 +453,21 @@ export function createCursorLiveRunCoordinator(deps: CursorLiveRunCoordinatorDep
 		async waitForProgress(run, signal): Promise<void> {
 			if (signal?.aborted) throw new CursorLiveRunAbortError();
 			if (coordinator.isReady(run)) return;
+			const stallMs = deps.getProgressStallMs?.() ?? DEFAULT_CURSOR_LIVE_RUN_PROGRESS_STALL_MS;
 			await new Promise<void>((resolve, reject) => {
 				const state = getPrivateState(run);
+				let settled = false;
 				const waiter: ProgressWaiter = { resolve, reject, signal };
+				const stallTimer =
+					stallMs > 0
+						? setTimeout(() => {
+								coordinator.markError(run, `${CURSOR_LIVE_RUN_STALL_ERROR_PREFIX}${stallMs}ms`);
+							}, stallMs)
+						: undefined;
 				const cleanup = (): void => {
+					if (settled) return;
+					settled = true;
+					if (stallTimer) clearTimeout(stallTimer);
 					state.waiters.delete(waiter);
 					if (waiter.onAbort) signal?.removeEventListener("abort", waiter.onAbort);
 				};
@@ -525,12 +540,10 @@ export function createCursorLiveRunCoordinator(deps: CursorLiveRunCoordinatorDep
 					}
 				}
 				if (abandoned) {
-					if (!run.done) {
-						try {
-							await cancelCursorLiveSdkRun(run);
-						} catch {
-							// cancellation failure should not block session-agent abandonment
-						}
+					try {
+						await cancelCursorLiveSdkRun(run);
+					} catch {
+						// cancellation failure should not block session-agent abandonment
 					}
 					await deps.abandonSessionAgent(run.sessionAgentScopeKey);
 				}

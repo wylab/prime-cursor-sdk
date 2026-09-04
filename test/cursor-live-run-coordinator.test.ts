@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { makeAssistantMessage, makeContext, makeModel } from "./helpers/pi-harness.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	CURSOR_LIVE_RUN_STALL_ERROR_PREFIX,
 	createCursorLiveRunCoordinator,
 	hasTrailingUserMessagesAfterToolResults,
 	type CursorLiveRun,
@@ -12,6 +13,8 @@ import type { CursorPiToolBridgeRun } from "../src/cursor-pi-tool-bridge.js";
 import {
 	cursorLiveRuns,
 	drainCursorLiveRunTurn,
+	resetCursorLiveRunProgressStallMs,
+	setCursorLiveRunProgressStallMs,
 } from "../src/cursor-provider-live-run-drain.js";
 import { __testUtils as cursorSdkProcessGuardTestUtils } from "../src/cursor-sdk-process-error-guard.js";
 
@@ -65,12 +68,13 @@ function makeBridgeRun(id: string, pendingPiToolCallIds: string[] = []): CursorP
 	};
 }
 
-function makeCoordinator(options: { scopeKey?: string; idleDisposeMs?: number } = {}) {
+function makeCoordinator(options: { scopeKey?: string; idleDisposeMs?: number; progressStallMs?: number } = {}) {
 	const deleteNativeToolDisplay = vi.fn();
 	const abandonSessionAgent = vi.fn().mockResolvedValue(undefined);
 	const coordinator = createCursorLiveRunCoordinator({
 		getScopeKey: () => options.scopeKey ?? "scope-1",
 		getIdleDisposeMs: () => options.idleDisposeMs ?? 10,
+		getProgressStallMs: () => options.progressStallMs ?? 0,
 		deleteNativeToolDisplay,
 		abandonSessionAgent,
 	});
@@ -95,6 +99,7 @@ function replayIdFromToolCallId(toolCallId: string): string | undefined {
 describe("cursor live run coordinator", () => {
 	afterEach(() => {
 		vi.useRealTimers();
+		resetCursorLiveRunProgressStallMs();
 	});
 
 	it("matches context tool results after trailing user messages and ignores disposed runs", async () => {
@@ -337,6 +342,58 @@ describe("cursor live run coordinator", () => {
 		expect(sdkCancel).toHaveBeenCalledOnce();
 		expect(abandonSessionAgent).toHaveBeenCalledWith("scope-abort");
 		expect(cursorSdkProcessGuardTestUtils.activeProviderTurnCount()).toBe(0);
+	});
+
+	it("marks a live run errored when waitForProgress sees no progress before the stall bound", async () => {
+		vi.useFakeTimers();
+		const { coordinator, abandonSessionAgent } = makeCoordinator({ progressStallMs: 20 });
+		const run = startRun(coordinator);
+		const sdkCancel = vi.fn().mockResolvedValue(undefined);
+		coordinator.attachSdkRun(run, { cancel: sdkCancel });
+		const waitForProgress = coordinator.waitForProgress(run);
+
+		await vi.advanceTimersByTimeAsync(19);
+		expect(run.errorMessage).toBeUndefined();
+		expect(run.done).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(1);
+		await waitForProgress;
+		await coordinator.release(run);
+
+		expect(run.done).toBe(true);
+		expect(run.errorMessage).toBe(`${CURSOR_LIVE_RUN_STALL_ERROR_PREFIX}20ms`);
+		expect(sdkCancel).toHaveBeenCalledOnce();
+		expect(abandonSessionAgent).toHaveBeenCalledWith("scope-1");
+	});
+
+	it("ends a draining turn with error when the live run stalls after message start", async () => {
+		vi.useFakeTimers();
+		setCursorLiveRunProgressStallMs(15);
+		const run = cursorLiveRuns.start({
+			id: "stall-drain",
+			agent: makeAgent(),
+			sessionAgentScopeKey: "stall-drain-scope",
+			promptInputTokens: 1,
+		});
+		const stream = createAssistantMessageEventStream();
+		const push = vi.spyOn(stream, "push");
+		const drain = drainCursorLiveRunTurn(
+			stream,
+			makeAssistantMessage(""),
+			makeModel(),
+			makeContext(),
+			run,
+			0,
+			{ mode: "emit" },
+		);
+
+		await vi.advanceTimersByTimeAsync(15);
+		const outcome = await drain;
+
+		expect(outcome).toBe("error");
+		expect(run.errorMessage).toBe(`${CURSOR_LIVE_RUN_STALL_ERROR_PREFIX}15ms`);
+		expect(push.mock.calls.some(([event]) => event.type === "error" && event.reason === "error")).toBe(true);
+		resetCursorLiveRunProgressStallMs();
 	});
 
 	it("matches bridge tool results when no native replay id is present", () => {
