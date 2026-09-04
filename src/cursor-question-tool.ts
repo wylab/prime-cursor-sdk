@@ -48,6 +48,36 @@ interface CursorQuestionDetails {
 	answers: CursorQuestionAnswer[];
 	uiAvailable: boolean;
 	cancelled: boolean;
+	/** True when the host/bridge aborted the tool; never means the user dismissed the UI. */
+	aborted?: boolean;
+}
+
+export const CURSOR_ASK_QUESTION_HOST_ABORT_TEXT =
+	"Question aborted by host/bridge (not a user cancel).";
+
+export class CursorAskQuestionHostAbortError extends Error {
+	constructor(message = CURSOR_ASK_QUESTION_HOST_ABORT_TEXT) {
+		super(message);
+		this.name = "CursorAskQuestionHostAbortError";
+	}
+}
+
+function isAbortLikeError(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	const name = "name" in error ? String((error as { name?: unknown }).name ?? "") : "";
+	const message = "message" in error ? String((error as { message?: unknown }).message ?? "") : "";
+	return (
+		name === "AbortError" ||
+		name === "CursorAskQuestionHostAbortError" ||
+		message === "Request was aborted" ||
+		message === CURSOR_ASK_QUESTION_HOST_ABORT_TEXT
+	);
+}
+
+function assertAskQuestionNotAborted(signal: AbortSignal | undefined): void {
+	if (signal?.aborted) {
+		throw new CursorAskQuestionHostAbortError();
+	}
 }
 
 interface CursorQuestionToolExtensionApi
@@ -144,49 +174,70 @@ function summarizeAnswers(answers: CursorQuestionAnswer[]): string {
 	].join("\n");
 }
 
-function buildDetails(questions: CursorQuestion[], answers: CursorQuestionAnswer[], uiAvailable: boolean): CursorQuestionDetails {
+function buildDetails(
+	questions: CursorQuestion[],
+	answers: CursorQuestionAnswer[],
+	uiAvailable: boolean,
+	aborted = false,
+): CursorQuestionDetails {
 	return {
 		questions,
 		answers,
 		uiAvailable,
-		cancelled: answers.some((answer) => answer.cancelled),
+		cancelled: !aborted && answers.some((answer) => answer.cancelled),
+		...(aborted ? { aborted: true } : {}),
 	};
 }
 
-async function askOneQuestion(question: CursorQuestion, ctx: { ui: ExtensionContext["ui"] }): Promise<CursorQuestionAnswer> {
-	if (question.options.length > 0) {
-		const labels = question.options.map((option) => option.description ? `${option.label} — ${option.description}` : option.label);
-		const customLabel = "Type a custom answer";
-		const choices = question.allowCustom ? [...labels, customLabel] : labels;
-		const selected = await ctx.ui.select(question.question, choices);
-		if (!selected) {
-			return { id: question.id, question: question.question, answer: null, wasCustom: false, cancelled: true };
+async function askOneQuestion(
+	question: CursorQuestion,
+	ctx: { ui: ExtensionContext["ui"] },
+	signal?: AbortSignal,
+): Promise<CursorQuestionAnswer> {
+	assertAskQuestionNotAborted(signal);
+	try {
+		if (question.options.length > 0) {
+			const labels = question.options.map((option) => option.description ? `${option.label} — ${option.description}` : option.label);
+			const customLabel = "Type a custom answer";
+			const choices = question.allowCustom ? [...labels, customLabel] : labels;
+			const selected = await ctx.ui.select(question.question, choices);
+			assertAskQuestionNotAborted(signal);
+			if (!selected) {
+				return { id: question.id, question: question.question, answer: null, wasCustom: false, cancelled: true };
+			}
+			if (selected === customLabel) {
+				const customAnswer = await ctx.ui.input(question.question, "Type your answer");
+				assertAskQuestionNotAborted(signal);
+				const trimmed = customAnswer?.trim();
+				return trimmed
+					? { id: question.id, question: question.question, answer: trimmed, value: trimmed, wasCustom: true, cancelled: false }
+					: { id: question.id, question: question.question, answer: null, wasCustom: true, cancelled: true };
+			}
+			const selectedIndex = labels.indexOf(selected);
+			const selectedOption = selectedIndex >= 0 ? question.options[selectedIndex] : undefined;
+			const answer = selectedOption?.label ?? selected;
+			return {
+				id: question.id,
+				question: question.question,
+				answer,
+				value: selectedOption?.value ?? answer,
+				wasCustom: false,
+				cancelled: false,
+			};
 		}
-		if (selected === customLabel) {
-			const customAnswer = await ctx.ui.input(question.question, "Type your answer");
-			const trimmed = customAnswer?.trim();
-			return trimmed
-				? { id: question.id, question: question.question, answer: trimmed, value: trimmed, wasCustom: true, cancelled: false }
-				: { id: question.id, question: question.question, answer: null, wasCustom: true, cancelled: true };
-		}
-		const selectedIndex = labels.indexOf(selected);
-		const selectedOption = selectedIndex >= 0 ? question.options[selectedIndex] : undefined;
-		const answer = selectedOption?.label ?? selected;
-		return {
-			id: question.id,
-			question: question.question,
-			answer,
-			value: selectedOption?.value ?? answer,
-			wasCustom: false,
-			cancelled: false,
-		};
-	}
 
-	const answer = await ctx.ui.input(question.question, "Type your answer");
-	const trimmed = answer?.trim();
-	return trimmed
-		? { id: question.id, question: question.question, answer: trimmed, value: trimmed, wasCustom: true, cancelled: false }
-		: { id: question.id, question: question.question, answer: null, wasCustom: true, cancelled: true };
+		const answer = await ctx.ui.input(question.question, "Type your answer");
+		assertAskQuestionNotAborted(signal);
+		const trimmed = answer?.trim();
+		return trimmed
+			? { id: question.id, question: question.question, answer: trimmed, value: trimmed, wasCustom: true, cancelled: false }
+			: { id: question.id, question: question.question, answer: null, wasCustom: true, cancelled: true };
+	} catch (error) {
+		if (signal?.aborted || isAbortLikeError(error)) {
+			throw new CursorAskQuestionHostAbortError();
+		}
+		throw error;
+	}
 }
 
 function syncCursorQuestionToolForModel(pi: Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">, model: ExtensionContext["model"]): void {
@@ -224,7 +275,7 @@ export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): 
 			"Use cursor_ask_question only when running a Cursor model and user input would materially change the plan, scope, platform, or implementation path.",
 			"Prefer cursor_ask_question with 2-4 concrete options instead of guessing when Cursor plan mode needs user choices.",
 		],
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const questions = normalizeQuestions(params as CursorAskQuestionParams);
 			if (questions.length === 0) {
 				throw new Error("No valid question was provided.");
@@ -239,9 +290,10 @@ export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): 
 			// awaits input so consumers (e.g. Herdr) can map it to blocked/working.
 			emitCursorAskQuestionBlockedEvent(pi, { active: true });
 			try {
+				assertAskQuestionNotAborted(signal);
 				const answers: CursorQuestionAnswer[] = [];
 				for (const question of questions) {
-					const answer = await askOneQuestion(question, ctx);
+					const answer = await askOneQuestion(question, ctx, signal);
 					answers.push(answer);
 					if (answer.cancelled) break;
 				}
@@ -250,6 +302,14 @@ export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): 
 					content: [{ type: "text" as const, text: summarizeAnswers(answers) }],
 					details: buildDetails(questions, answers, true),
 				};
+			} catch (error) {
+				if (error instanceof CursorAskQuestionHostAbortError || signal?.aborted || isAbortLikeError(error)) {
+					return {
+						content: [{ type: "text" as const, text: CURSOR_ASK_QUESTION_HOST_ABORT_TEXT }],
+						details: buildDetails(questions, [], true, true),
+					};
+				}
+				throw error;
 			} finally {
 				emitCursorAskQuestionBlockedEvent(pi, { active: false });
 			}
