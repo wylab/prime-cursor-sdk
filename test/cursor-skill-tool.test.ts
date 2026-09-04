@@ -9,6 +9,7 @@ import {
 	formatCursorSkillsForPrompt,
 	registerCursorSkillTool,
 	resolveCursorSkillSystemPrompt,
+	__testUtils as skillToolTestUtils,
 } from "../src/cursor-skill-tool.js";
 import { buildCursorPiToolBridgeSnapshot } from "../src/cursor-pi-tool-bridge.js";
 import { buildCursorPrompt } from "../src/context.js";
@@ -23,6 +24,7 @@ import {
 afterEach(() => {
 	delete process.env.PI_CURSOR_RUNTIME;
 	delete process.env.PI_CURSOR_PI_TOOL_BRIDGE;
+	skillToolTestUtils.clearActivatedSkillsThisSession();
 });
 
 function makeSkill(overrides: Partial<Skill> & Pick<Skill, "name" | "filePath">): Skill {
@@ -270,6 +272,63 @@ describe("registerCursorSkillTool", () => {
 
 		expect(result).toBeUndefined();
 		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+	});
+
+	it("returns already_loaded on a second activate in the same session and does not re-read SKILL.md", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-cursor-skill-once-"));
+		const skillDir = join(dir, "global-skill");
+		await mkdir(skillDir, { recursive: true });
+		const skillPath = join(skillDir, "SKILL.md");
+		await writeFile(skillPath, "---\nname: global-skill\ndescription: Global skill\n---\n# First body");
+		const skill = makeSkill({ name: "global-skill", description: "Global skill", filePath: skillPath });
+		const pi = createPiHarness({ activeTools: ["read"] });
+		registerCursorSkillTool(pi);
+		await pi.invokeEvent(
+			"before_agent_start",
+			{
+				type: "before_agent_start",
+				prompt: "hello",
+				systemPrompt: "System prompt.",
+				systemPromptOptions: { ...createDefaultSystemPromptOptions(dir), skills: [skill] },
+			} satisfies BeforeAgentStartEvent,
+			{ model: makeModel("composer-2.5"), cwd: dir },
+		);
+
+		const tool = getHarnessRegisteredTool(pi._tools, CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		const first = await tool.execute("call-1", { name: "global-skill" }, undefined, undefined, createExtensionTestContext({ model: makeModel("composer-2.5"), cwd: dir }));
+		const firstText = first.content?.[0]?.type === "text" ? first.content[0].text : "";
+		expect(firstText).toContain("<skill_content name=\"global-skill\">");
+		expect(firstText).toContain("# First body");
+		expect(first.details).not.toMatchObject({ alreadyLoaded: true });
+
+		await writeFile(skillPath, "---\nname: global-skill\ndescription: Global skill\n---\n# Mutated body");
+		const second = await tool.execute("call-2", { name: "global-skill" }, undefined, undefined, createExtensionTestContext({ model: makeModel("composer-2.5"), cwd: dir }));
+		const secondText = second.content?.[0]?.type === "text" ? second.content[0].text : "";
+		expect(secondText).toContain("<skill_already_loaded name=\"global-skill\">");
+		expect(secondText).not.toContain("# Mutated body");
+		expect(secondText).not.toContain("<skill_content");
+		expect(second.details).toMatchObject({ alreadyLoaded: true, name: "global-skill" });
+
+		const catalog = formatCursorSkillsForPrompt([skill]);
+		expect(catalog).toContain("<status>already_loaded</status>");
+		expect(catalog).not.toContain("SKILL.md");
+
+		await pi.runSessionStart({ model: makeModel("composer-2.5"), cwd: dir });
+		await pi.invokeEvent(
+			"before_agent_start",
+			{
+				type: "before_agent_start",
+				prompt: "hello again",
+				systemPrompt: "System prompt.",
+				systemPromptOptions: { ...createDefaultSystemPromptOptions(dir), skills: [skill] },
+			} satisfies BeforeAgentStartEvent,
+			{ model: makeModel("composer-2.5"), cwd: dir },
+		);
+		const third = await tool.execute("call-3", { name: "global-skill" }, undefined, undefined, createExtensionTestContext({ model: makeModel("composer-2.5"), cwd: dir }));
+		const thirdText = third.content?.[0]?.type === "text" ? third.content[0].text : "";
+		expect(thirdText).toContain("<skill_content name=\"global-skill\">");
+		expect(thirdText).toContain("# Mutated body");
+		expect(third.details).not.toMatchObject({ alreadyLoaded: true });
 	});
 
 	it("does not expose the activation tool when no visible skills are available", async () => {
