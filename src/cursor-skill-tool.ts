@@ -14,6 +14,7 @@ import { isCursorModel } from "./cursor-model.js";
 import { registerCursorModelLifecycle, type CursorModelLifecycleExtensionApi } from "./cursor-model-lifecycle.js";
 import { resolveCursorPiToolBridgeEnabled } from "./cursor-pi-tool-bridge-env.js";
 import { resolveEffectiveCursorConfigForContext } from "./cursor-runtime-state.js";
+import { getCursorSessionScopeKey } from "./cursor-session-scope.js";
 
 export const CURSOR_ACTIVATE_SKILL_TOOL_NAME = "cursor_activate_skill";
 export const CURSOR_ACTIVATE_SKILL_MCP_NAME = "pi__cursor_activate_skill";
@@ -34,9 +35,11 @@ interface CursorSkillActivationDetails {
 	baseDir?: string;
 	resources: string[];
 	availableSkillNames: string[];
+	alreadyLoaded?: boolean;
 }
 
 let currentSkillsByName = new Map<string, Skill>();
+const activatedSkillNamesByScope = new Map<string, Set<string>>();
 
 function escapeXml(value: string): string {
 	return value
@@ -53,6 +56,20 @@ function getVisibleSkills(skills: readonly Skill[] | undefined): Skill[] {
 
 function setCurrentSkills(skills: readonly Skill[] | undefined): void {
 	currentSkillsByName = new Map(getVisibleSkills(skills).map((skill) => [skill.name, skill]));
+}
+
+function activatedSkillNamesThisSession(): Set<string> {
+	const scopeKey = getCursorSessionScopeKey();
+	let activated = activatedSkillNamesByScope.get(scopeKey);
+	if (!activated) {
+		activated = new Set();
+		activatedSkillNamesByScope.set(scopeKey, activated);
+	}
+	return activated;
+}
+
+function clearActivatedSkillsThisSession(): void {
+	activatedSkillNamesByScope.delete(getCursorSessionScopeKey());
 }
 
 function getAvailableSkillNames(): string[] {
@@ -95,6 +112,7 @@ export function formatCursorSkillsForPrompt(skills: readonly Skill[]): string {
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
 		`When a task matches a skill's description, call ${CURSOR_ACTIVATE_SKILL_MCP_NAME} with the skill name to load its full SKILL.md instructions before proceeding.`,
 		"If the pi bridge is disabled and the activation tool is unavailable, use Cursor's file-read capability on the listed SKILL.md location instead.",
+		`Do not call ${CURSOR_ACTIVATE_SKILL_MCP_NAME} or re-read SKILL.md for a skill marked already_loaded. Follow the in-context copy.`,
 		"When a skill references relative paths, resolve them against the skill directory (the parent of SKILL.md / dirname of the path) and use absolute paths in tool calls.",
 		"",
 		"<available_skills>",
@@ -104,6 +122,9 @@ export function formatCursorSkillsForPrompt(skills: readonly Skill[]): string {
 		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
 		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
 		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+		if (activatedSkillNamesThisSession().has(skill.name)) {
+			lines.push("    <status>already_loaded</status>");
+		}
 		lines.push("  </skill>");
 	}
 	lines.push("</available_skills>");
@@ -189,6 +210,14 @@ function wrapSkillContent(skill: Skill, content: string, resources: readonly str
 	].join("\n");
 }
 
+function wrapAlreadyLoadedSkill(skill: Skill): string {
+	return [
+		`<skill_already_loaded name="${escapeXml(skill.name)}">`,
+		`Skill ${skill.name} is already loaded in this session. Follow the in-context copy. Do not re-read SKILL.md.`,
+		"</skill_already_loaded>",
+	].join("\n");
+}
+
 export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 	pi.registerTool({
 		name: CURSOR_ACTIVATE_SKILL_TOOL_NAME,
@@ -214,11 +243,19 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 				);
 			}
 
+			if (activatedSkillNamesThisSession().has(requestedName)) {
+				return {
+					content: [{ type: "text" as const, text: wrapAlreadyLoadedSkill(skill) }],
+					details: { ...buildActivationDetails(skill), alreadyLoaded: true },
+				};
+			}
+
 			try {
 				const [content, resources] = await Promise.all([
 					readFile(skill.filePath, "utf8"),
 					listSkillResourcePaths(dirname(skill.filePath)),
 				]);
+				activatedSkillNamesThisSession().add(requestedName);
 				return {
 					content: [{ type: "text" as const, text: wrapSkillContent(skill, content, resources) }],
 					details: buildActivationDetails(skill, resources),
@@ -233,6 +270,7 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 
 	const clearSkillsAndSync = (model: ExtensionContext["model"], runtime: CursorRuntime = "local"): void => {
 		setCurrentSkills([]);
+		clearActivatedSkillsThisSession();
 		syncCursorSkillToolForModel(pi, model, runtime);
 	};
 
@@ -246,7 +284,10 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 		turnStart: (_event, ctx) => {
 			const cursorModel = isCursorModel(ctx.model);
 			const runtime = resolveEffectiveRuntimeForSkillLifecycle(cursorModel, ctx);
-			if (!cursorModel || runtime === "cloud") setCurrentSkills([]);
+			if (!cursorModel || runtime === "cloud") {
+				setCurrentSkills([]);
+				clearActivatedSkillsThisSession();
+			}
 			syncCursorSkillToolForModel(pi, ctx.model, runtime);
 		},
 		beforeAgentStart: (event, ctx) => {
@@ -271,4 +312,6 @@ export const __testUtils = {
 	setCurrentSkills,
 	listSkillResourcePaths,
 	wrapSkillContent,
+	clearActivatedSkillsThisSession,
+	getActivatedSkillNames: (): string[] => [...activatedSkillNamesThisSession()],
 };
