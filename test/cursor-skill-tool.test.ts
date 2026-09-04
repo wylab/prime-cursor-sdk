@@ -22,6 +22,7 @@ import {
 
 afterEach(() => {
 	delete process.env.PI_CURSOR_RUNTIME;
+	delete process.env.PI_CURSOR_PI_TOOL_BRIDGE;
 });
 
 function makeSkill(overrides: Partial<Skill> & Pick<Skill, "name" | "filePath">): Skill {
@@ -48,8 +49,38 @@ describe("formatCursorSkillsForPrompt", () => {
 
 		expect(prompt).toContain(CURSOR_ACTIVATE_SKILL_MCP_NAME);
 		expect(prompt).toContain("<name>global-skill</name>");
-		expect(prompt).toContain("/Users/me/.pi/agent/skills/global-skill/SKILL.md");
 		expect(prompt).not.toContain("manual-only");
+	});
+
+	it("does not invite SKILL.md file-read while the activation tool is the load path", () => {
+		const prompt = formatCursorSkillsForPrompt([
+			makeSkill({ name: "global-skill", description: "Use for global work", filePath: "/Users/me/.pi/agent/skills/global-skill/SKILL.md" }),
+			makeSkill({ name: "global-skill", description: "Duplicate name later path", filePath: "/Users/me/.agents/skills/global-skill/SKILL.md" }),
+		]);
+
+		expect(prompt).toContain(CURSOR_ACTIVATE_SKILL_MCP_NAME);
+		expect(prompt).not.toContain("file-read capability");
+		expect(prompt).not.toContain("<location>");
+		expect(prompt).not.toContain("SKILL.md");
+		expect(prompt).not.toContain("/Users/me/.pi/agent/skills/global-skill/SKILL.md");
+		expect(prompt).not.toContain("/Users/me/.agents/skills/global-skill/SKILL.md");
+		expect(prompt.match(/<name>global-skill<\/name>/g)).toHaveLength(1);
+	});
+
+	it("lists SKILL.md only when the activation tool is unavailable", () => {
+		const prompt = formatCursorSkillsForPrompt(
+			[
+				makeSkill({ name: "global-skill", description: "Use for global work", filePath: "/Users/me/.pi/agent/skills/global-skill/SKILL.md" }),
+				makeSkill({ name: "global-skill", description: "Duplicate name later path", filePath: "/Users/me/.agents/skills/global-skill/SKILL.md" }),
+			],
+			{ activationAvailable: false },
+		);
+
+		expect(prompt).not.toContain(CURSOR_ACTIVATE_SKILL_MCP_NAME);
+		expect(prompt).toContain("file-read capability");
+		expect(prompt).toContain("/Users/me/.agents/skills/global-skill/SKILL.md");
+		expect(prompt).not.toContain("/Users/me/.pi/agent/skills/global-skill/SKILL.md");
+		expect(prompt.match(/<name>global-skill<\/name>/g)).toHaveLength(1);
 	});
 });
 
@@ -82,6 +113,21 @@ describe("resolveCursorSkillSystemPrompt", () => {
 		expect(resolved).toContain(CURSOR_ACTIVATE_SKILL_MCP_NAME);
 		expect(resolved).toContain("<name>global-skill</name>");
 		expect(resolved).not.toContain("Use the read tool to load a skill's file");
+		expect(resolved).not.toContain("file-read capability");
+		expect(resolved).not.toContain("/Users/me/.pi/agent/skills/global-skill/SKILL.md");
+	});
+
+	it("keeps SKILL.md locations only when the pi bridge is disabled", () => {
+		process.env.PI_CURSOR_PI_TOOL_BRIDGE = "false";
+		const resolved = resolveCursorSkillSystemPrompt(
+			piSkillSection,
+			cursorModel,
+			{ ...createDefaultSystemPromptOptions("/repo"), skills: [skill] },
+		);
+
+		expect(resolved).not.toContain(CURSOR_ACTIVATE_SKILL_MCP_NAME);
+		expect(resolved).toContain("file-read capability");
+		expect(resolved).toContain("/Users/me/.pi/agent/skills/global-skill/SKILL.md");
 	});
 
 	it("removes Pi skill metadata for cloud Cursor models", () => {

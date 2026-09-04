@@ -87,15 +87,34 @@ function syncCursorSkillToolForModel(
 	pi.setActiveTools([...activeToolNames]);
 }
 
-export function formatCursorSkillsForPrompt(skills: readonly Skill[]): string {
-	const visibleSkills = getVisibleSkills(skills);
+export type FormatCursorSkillsForPromptOptions = {
+	activationAvailable?: boolean;
+};
+
+function uniqueVisibleSkillsByName(skills: readonly Skill[]): Skill[] {
+	const byName = new Map<string, Skill>();
+	for (const skill of getVisibleSkills(skills)) {
+		byName.set(skill.name, skill);
+	}
+	return [...byName.values()];
+}
+
+export function formatCursorSkillsForPrompt(
+	skills: readonly Skill[],
+	options: FormatCursorSkillsForPromptOptions = {},
+): string {
+	const visibleSkills = uniqueVisibleSkillsByName(skills);
 	if (visibleSkills.length === 0) return "";
+	const activationAvailable = options.activationAvailable ?? true;
 
 	const lines = [
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
-		`When a task matches a skill's description, call ${CURSOR_ACTIVATE_SKILL_MCP_NAME} with the skill name to load its full SKILL.md instructions before proceeding.`,
-		"If the pi bridge is disabled and the activation tool is unavailable, use Cursor's file-read capability on the listed SKILL.md location instead.",
-		"When a skill references relative paths, resolve them against the skill directory (the parent of SKILL.md / dirname of the path) and use absolute paths in tool calls.",
+		activationAvailable
+			? `When a task matches a skill's description, call ${CURSOR_ACTIVATE_SKILL_MCP_NAME} with the skill name to load its instructions before proceeding.`
+			: "If the activation tool is unavailable, use Cursor's file-read capability on the listed SKILL.md location instead.",
+		activationAvailable
+			? "When a skill references relative paths, resolve them against the skill directory returned by the activation tool and use absolute paths in tool calls."
+			: "When a skill references relative paths, resolve them against the skill directory (the parent of SKILL.md / dirname of the path) and use absolute paths in tool calls.",
 		"",
 		"<available_skills>",
 	];
@@ -103,7 +122,9 @@ export function formatCursorSkillsForPrompt(skills: readonly Skill[]): string {
 		lines.push("  <skill>");
 		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
 		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+		if (!activationAvailable) {
+			lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+		}
 		lines.push("  </skill>");
 	}
 	lines.push("</available_skills>");
@@ -120,7 +141,8 @@ export function resolveCursorSkillSystemPrompt(
 	if (runtime === "cloud") return systemPrompt.replace(AVAILABLE_SKILLS_SECTION_PATTERN, "");
 	const skills = getVisibleSkills(systemPromptOptions?.skills);
 	if (skills.length === 0) return systemPrompt;
-	const replacement = formatCursorSkillsForPrompt(skills);
+	const activationAvailable = runtime === "local" && resolveCursorPiToolBridgeEnabled();
+	const replacement = formatCursorSkillsForPrompt(skills, { activationAvailable });
 	if (AVAILABLE_SKILLS_SECTION_PATTERN.test(systemPrompt)) {
 		return systemPrompt.replace(AVAILABLE_SKILLS_SECTION_PATTERN, replacement);
 	}
