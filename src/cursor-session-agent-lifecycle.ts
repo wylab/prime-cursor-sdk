@@ -34,9 +34,11 @@ export function registerCursorSessionAgentLifecycle(pi: CursorSessionAgentLifecy
 		// A global liveCount>0 gate over-retains idle prior-scope agents.
 		const activeForPrevious = cursorLiveRuns.getActiveForScope(previousScopeKey);
 		if (activeForPrevious) {
-			console.error(
-				`[pi-cursor-sdk:lifecycle] skip-dispose previous=${previousScopeKey} activeForPrevious=true`,
-			);
+			if (process.env.PI_CURSOR_PI_TOOL_BRIDGE_DEBUG === "1" || process.env.PI_CURSOR_PI_TOOL_BRIDGE_DEBUG === "true") {
+				console.error(
+					`[pi-cursor-sdk:lifecycle] skip-dispose previous=${previousScopeKey} activeForPrevious=true`,
+				);
+			}
 			return;
 		}
 		await disposeSessionCursorAgent(previousScopeKey);

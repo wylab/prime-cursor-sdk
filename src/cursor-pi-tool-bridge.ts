@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import {
 	CURSOR_PI_TOOL_BRIDGE_DEBUG_ENV,
 	CURSOR_PI_TOOL_BRIDGE_DIAGNOSTIC_PREFIX,
+	resolveCursorPiToolBridgeDebugEnabled,
 	type CursorPiToolBridgeDiagnosticEvent,
 	serializeCursorPiToolBridgeDiagnostic,
 } from "./cursor-pi-tool-bridge-diagnostics.js";
@@ -90,6 +91,12 @@ Get-CimInstance Win32_Process -Filter "Name = 'bash.exe' OR Name = 'sh.exe'" |
 	});
 }
 
+
+function logBridgeSkip(message: string): void {
+	if (!resolveCursorPiToolBridgeDebugEnabled()) return;
+	console.error(`${CURSOR_PI_TOOL_BRIDGE_DIAGNOSTIC_PREFIX} ${message}`);
+}
+
 function attachCursorPiToolBridgeHandlers(
 	pi: CursorPiToolBridgeExtensionApi,
 	bridge: CursorPiToolBridgeRegistry,
@@ -124,6 +131,12 @@ function attachCursorPiToolBridgeHandlers(
 		bridgeToolExecutionAbortTracker.finish(event.toolCallId);
 	});
 	pi.on("session_shutdown", async (event) => {
+		// Stale attachments from a prior register on this `pi` must not abort or
+		// dispose the currently-registered bridge instance.
+		if (registeredCursorPiToolBridge !== bridge) {
+			logBridgeSkip(`skip-stale-shutdown-handler reason=${event.reason}`);
+			return;
+		}
 		const reason = `Cursor pi tool bridge session shutdown: ${event.reason}`;
 		// Concurrent RLM sessions share one worker-global registry. A child
 		// session_shutdown (or a second extension register) must not disposeAll
@@ -131,12 +144,7 @@ function attachCursorPiToolBridgeHandlers(
 		// already tears down that session's bridgeRun. Only reload replaces the
 		// whole registry.
 		if (event.reason !== "reload") {
-			if (bridge.getEndpointCount() > 0) {
-				console.error(
-					`[pi-cursor-sdk:bridge] skip-shutdown-disposeAll reason=${event.reason} endpoints=${bridge.getEndpointCount()}`,
-				);
-				return;
-			}
+			logBridgeSkip(`skip-shutdown-disposeAll reason=${event.reason} endpoints=${bridge.getEndpointCount()}`);
 			return;
 		}
 		bridgeToolExecutionAbortTracker.abortAll(reason);
@@ -157,9 +165,7 @@ export function registerCursorPiToolBridge(pi: CursorPiToolBridgeExtensionApi): 
 		// endpointCount can be 0 briefly (or for non-HTTP waiters) while a parent
 		// pi__ipython CallTool is still in flight. Rebind snapshots to this
 		// session's ExtensionAPI and attach handlers only if this `pi` is new.
-		console.error(
-			`[pi-cursor-sdk:bridge] skip-reregister-dispose endpoints=${existing.getEndpointCount()}`,
-		);
+		logBridgeSkip(`skip-reregister-dispose endpoints=${existing.getEndpointCount()}`);
 		existing.setSnapshotApi(pi);
 		attachCursorPiToolBridgeHandlers(pi, existing);
 		return existing;
