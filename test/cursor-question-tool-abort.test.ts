@@ -146,6 +146,44 @@ describe("cursor_ask_question abort vs user cancel", () => {
 		expect(result.details).toMatchObject({ cancelled: false, aborted: true });
 	});
 
+
+	it("keeps already-collected answers when host aborts between questions", async () => {
+		const pi = createExtensionPi();
+		await extensionFactory(pi);
+		await pi.runSessionStart();
+
+		const controller = new AbortController();
+		let selectCalls = 0;
+		const select = vi.fn().mockImplementation(async () => {
+			selectCalls += 1;
+			if (selectCalls === 1) return "Yes";
+			controller.abort();
+			throw new DOMException("Request was aborted", "AbortError");
+		});
+		const tool = pi._tools.find((candidate) => candidate.name === CURSOR_ASK_QUESTION_TOOL_NAME);
+
+		const result = await tool!.execute(
+			"question-abort-mid-batch",
+			{
+				questions: [
+					{ question: "First?", options: ["Yes", "No"], allowCustom: false },
+					{ question: "Second?", options: ["A", "B"], allowCustom: false },
+				],
+			},
+			controller.signal,
+			undefined,
+			createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select, input: vi.fn() } }),
+		);
+
+		expect(result.content).toEqual([{ type: "text", text: CURSOR_ASK_QUESTION_HOST_ABORT_TEXT }]);
+		expect(result.details).toMatchObject({
+			cancelled: false,
+			aborted: true,
+		});
+		expect(result.details?.answers).toEqual([
+			expect.objectContaining({ answer: "Yes", cancelled: false }),
+		]);
+	});
 	it("still surfaces non-abort UI failures as errors", async () => {
 		const pi = createExtensionPi();
 		await extensionFactory(pi);

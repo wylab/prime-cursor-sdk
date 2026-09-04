@@ -233,6 +233,9 @@ async function askOneQuestion(
 			? { id: question.id, question: question.question, answer: trimmed, value: trimmed, wasCustom: true, cancelled: false }
 			: { id: question.id, question: question.question, answer: null, wasCustom: true, cancelled: true };
 	} catch (error) {
+		if (error instanceof CursorAskQuestionHostAbortError) {
+			throw error;
+		}
 		if (signal?.aborted || isAbortLikeError(error)) {
 			throw new CursorAskQuestionHostAbortError();
 		}
@@ -289,9 +292,9 @@ export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): 
 			// Emit a package-namespaced blocked signal while the questionnaire
 			// awaits input so consumers (e.g. Herdr) can map it to blocked/working.
 			emitCursorAskQuestionBlockedEvent(pi, { active: true });
+			const answers: CursorQuestionAnswer[] = [];
 			try {
 				assertAskQuestionNotAborted(signal);
-				const answers: CursorQuestionAnswer[] = [];
 				for (const question of questions) {
 					const answer = await askOneQuestion(question, ctx, signal);
 					answers.push(answer);
@@ -309,7 +312,7 @@ export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): 
 				if (error instanceof CursorAskQuestionHostAbortError || signal?.aborted || isAbortLikeError(error)) {
 					return {
 						content: [{ type: "text" as const, text: CURSOR_ASK_QUESTION_HOST_ABORT_TEXT }],
-						details: buildDetails(questions, [], true, true),
+						details: buildDetails(questions, answers, true, true),
 					};
 				}
 				throw error;
