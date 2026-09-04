@@ -6,6 +6,7 @@ import type {
 	SessionTreeEvent,
 } from "@earendil-works/pi-coding-agent";
 import { clearCursorSdkHttp1 } from "./cursor-http1.js";
+import { cursorLiveRuns } from "./cursor-provider-live-run-drain.js";
 import { onCursorSessionScopeKeyChange } from "./cursor-session-scope.js";
 import {
 	disposeSessionCursorAgent,
@@ -23,6 +24,20 @@ export interface CursorSessionAgentLifecycleExtensionApi {
 
 export function registerCursorSessionAgentLifecycle(pi: CursorSessionAgentLifecycleExtensionApi): void {
 	onCursorSessionScopeKeyChange(async (previousScopeKey) => {
+		// RLM children (and other concurrent sessions in one daemon worker) fire
+		// session_start and rewrite the process-global Cursor scope key. Disposing
+		// the previous scope cancels that session's pi tool bridge run, which aborts
+		// in-flight parent pi__ipython as rejectionKind "cancelled" / "Request was aborted".
+		// Keep the previous-scope agent while any live run is still open; shutdown /
+		// tree / reload paths still dispose.
+		const activeForPrevious = cursorLiveRuns.getActiveForScope(previousScopeKey);
+		const liveCount = cursorLiveRuns.count();
+		if (activeForPrevious || liveCount > 0) {
+			console.error(
+				`[pi-cursor-sdk:lifecycle] skip-dispose previous=${previousScopeKey} activeForPrevious=${Boolean(activeForPrevious)} liveCount=${liveCount}`,
+			);
+			return;
+		}
 		await disposeSessionCursorAgent(previousScopeKey);
 	});
 	pi.on("session_shutdown", async (event) => {

@@ -88,11 +88,10 @@ Get-CimInstance Win32_Process -Filter "Name = 'bash.exe' OR Name = 'sh.exe'" |
 	});
 }
 
-export function registerCursorPiToolBridge(pi: CursorPiToolBridgeExtensionApi): CursorPiToolBridge {
-	bridgeToolExecutionAbortTracker.abortAll("Cursor pi tool bridge extension reloaded");
-	void registeredCursorPiToolBridge?.disposeAll("Cursor pi tool bridge extension reloaded");
-	const bridge = new CursorPiToolBridgeRegistry(pi);
-	registeredCursorPiToolBridge = bridge;
+function attachCursorPiToolBridgeHandlers(
+	pi: CursorPiToolBridgeExtensionApi,
+	bridge: CursorPiToolBridgeRegistry,
+): void {
 	pi.on("tool_call", (event, ctx) => {
 		if (registeredCursorPiToolBridge !== bridge) return undefined;
 		if (!bridge.hasPendingPiToolCallId(event.toolCallId)) {
@@ -119,9 +118,46 @@ export function registerCursorPiToolBridge(pi: CursorPiToolBridgeExtensionApi): 
 	});
 	pi.on("session_shutdown", async (event) => {
 		const reason = `Cursor pi tool bridge session shutdown: ${event.reason}`;
+		// Concurrent RLM sessions share one worker-global registry. A child
+		// session_shutdown (or a second extension register) must not disposeAll
+		// and cancel the parent's in-flight pi__ipython. Per-scope agent dispose
+		// already tears down that session's bridgeRun. Only reload replaces the
+		// whole registry.
+		if (event.reason !== "reload") {
+			if (bridge.getEndpointCount() > 0) {
+				console.error(
+					`[pi-cursor-sdk:bridge] skip-shutdown-disposeAll reason=${event.reason} endpoints=${bridge.getEndpointCount()}`,
+				);
+				return;
+			}
+			return;
+		}
 		bridgeToolExecutionAbortTracker.abortAll(reason);
+		if (registeredCursorPiToolBridge === bridge) {
+			registeredCursorPiToolBridge = undefined;
+		}
 		await bridge.disposeAll(reason);
 	});
+}
+
+export function registerCursorPiToolBridge(pi: CursorPiToolBridgeExtensionApi): CursorPiToolBridge {
+	const existing = registeredCursorPiToolBridge;
+	if (existing) {
+		// RLM child session_start reloads this extension in the same daemon worker.
+		// disposeAll here was cancelling the parent's pending bridge CallTool
+		// (rejectionKind "cancelled" / "Request was aborted") even after scope
+		// dispose was skipped. Keep the live registry whenever one already exists:
+		// endpointCount can be 0 briefly (or for non-HTTP waiters) while a parent
+		// pi__ipython CallTool is still in flight.
+		console.error(
+			`[pi-cursor-sdk:bridge] skip-reregister-dispose endpoints=${existing.getEndpointCount()}`,
+		);
+		attachCursorPiToolBridgeHandlers(pi, existing);
+		return existing;
+	}
+	const bridge = new CursorPiToolBridgeRegistry(pi);
+	registeredCursorPiToolBridge = bridge;
+	attachCursorPiToolBridgeHandlers(pi, bridge);
 	return bridge;
 }
 
