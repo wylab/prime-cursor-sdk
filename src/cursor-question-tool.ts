@@ -203,7 +203,9 @@ async function askOneQuestion(
 			const selected = await ctx.ui.select(question.question, choices, signal ? { signal } : undefined);
 			assertAskQuestionNotAborted(signal);
 			if (!selected) {
-				return { id: question.id, question: question.question, answer: null, wasCustom: false, cancelled: true };
+				// Cursor host dismiss / unseen-session abort returns empty without
+				// always aborting the tool signal. That is not a user cancel.
+				throw new CursorAskQuestionHostAbortError();
 			}
 			if (selected === customLabel) {
 				const customAnswer = await ctx.ui.input(question.question, "Type your answer", signal ? { signal } : undefined);

@@ -28,7 +28,7 @@ describe("cursor_ask_question abort vs user cancel", () => {
 		mockedDiscover.mockResolvedValueOnce([]);
 	});
 
-	it("reports User cancelled only when the UI dismisses without host abort", async () => {
+	it("does not blame the user when the UI dismisses empty without a signal", async () => {
 		const pi = createExtensionPi();
 		await extensionFactory(pi);
 		await pi.runSessionStart();
@@ -36,16 +36,16 @@ describe("cursor_ask_question abort vs user cancel", () => {
 		const select = vi.fn().mockResolvedValue(undefined);
 		const tool = pi._tools.find((candidate) => candidate.name === CURSOR_ASK_QUESTION_TOOL_NAME);
 		const result = await tool!.execute(
-			"question-user-cancel",
+			"question-empty-dismiss",
 			{ question: "Proceed?", options: ["Yes", "No"], allowCustom: false },
 			undefined,
 			undefined,
 			createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select, input: vi.fn() } }),
 		);
 
-		expect(result.content).toEqual([{ type: "text", text: "User cancelled the question." }]);
-		expect(result.details).toMatchObject({ cancelled: true });
-		expect(result.details).not.toHaveProperty("aborted");
+		expect(result.content).toEqual([{ type: "text", text: CURSOR_ASK_QUESTION_HOST_ABORT_TEXT }]);
+		expect(result.details).toMatchObject({ cancelled: false, aborted: true });
+		expect(String(result.content[0]?.type === "text" ? result.content[0].text : "")).not.toContain("User cancelled");
 	});
 
 	it("does not blame the user when AbortSignal is already aborted", async () => {
